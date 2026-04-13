@@ -1,0 +1,1203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Find Her</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a0a10;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Segoe UI', 'Georgia', serif;
+}
+canvas {
+  border: 2px solid #ff69b455;
+  border-radius: 8px;
+  box-shadow: 0 0 40px #ff69b433;
+  image-rendering: pixelated;
+}
+</style>
+</head>
+<body>
+<canvas id="game" width="960" height="540"></canvas>
+
+<!-- Background Music: One song per level -->
+<audio id="bg-music-0" src="The 1975 - fallingforyou.mp3" preload="auto"></audio>
+<audio id="bg-music-1" src="Old Love - Yuji _ Putri Dahlia (Official Lyrics Video) - (320 Kbps).mp3" preload="auto"></audio>
+<audio id="bg-music-2" src="The 1975 - About You (Official) - (320 Kbps).mp3" preload="auto"></audio>
+<audio id="bg-music-3" src="Bruno Mars - Risk It All [The Romantic] - (320 Kbps).mp3" preload="auto"></audio>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  FIND HER — An Emotional Mini Game (Advanced Version)
+// ═══════════════════════════════════════════════════════
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// ── Audio System ──
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+let reverbNode = null;
+
+function initAudio() {
+  if (!audioCtx) audioCtx = new AudioCtx();
+}
+
+function createReverb() {
+  if (!audioCtx || reverbNode) return;
+  const len = audioCtx.sampleRate * 2.5;
+  const impulse = audioCtx.createBuffer(2, len, audioCtx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = impulse.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.8);
+    }
+  }
+  reverbNode = audioCtx.createConvolver();
+  reverbNode.buffer = impulse;
+  reverbNode.connect(audioCtx.destination);
+}
+
+function playNote(freq, dur, type = 'sine', vol = 0.06, delay = 0, rev = false) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  const t = audioCtx.currentTime + delay;
+  gain.gain.setValueAtTime(0.001, t);
+  gain.gain.linearRampToValueAtTime(vol, t + Math.min(0.08, dur * 0.15));
+  gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  if (rev && reverbNode) {
+    const rg = audioCtx.createGain();
+    rg.gain.value = vol * 0.5;
+    osc.connect(rg);
+    rg.connect(reverbNode);
+  }
+  osc.start(t);
+  osc.stop(t + dur);
+}
+
+function sfxCollect() {
+  playNote(659, 0.15, 'sine', 0.07, 0, true);
+  playNote(784, 0.15, 'sine', 0.07, 0.08, true);
+  playNote(988, 0.2, 'sine', 0.06, 0.15, true);
+}
+function sfxHit() {
+  playNote(180, 0.35, 'sawtooth', 0.04);
+  playNote(120, 0.45, 'sawtooth', 0.03, 0.1);
+}
+function sfxJump() {
+  playNote(440, 0.08, 'sine', 0.03);
+  playNote(554, 0.1, 'sine', 0.03, 0.04);
+}
+function sfxMessage() {
+  playNote(523, 0.1, 'sine', 0.05, 0, true);
+  playNote(659, 0.12, 'sine', 0.04, 0.08, true);
+}
+function sfxTooLate() {
+  playNote(220, 0.6, 'sine', 0.04, 0, true);
+  playNote(196, 0.8, 'triangle', 0.03, 0.2, true);
+}
+
+// ── Background Music ──
+const bgTracks = [
+  document.getElementById('bg-music-0'),
+  document.getElementById('bg-music-1'),
+  document.getElementById('bg-music-2'),
+  document.getElementById('bg-music-3'),
+];
+bgTracks.forEach(t => { t.volume = 0.5; t.loop = true; });
+let currentTrack = null;
+let musicTargetVol = 0.5;
+
+function startBgMusic(idx) {
+  const i = (idx !== undefined) ? idx : currentLevel;
+  const nt = bgTracks[Math.min(i, bgTracks.length - 1)];
+  if (currentTrack === nt && !currentTrack.paused) return;
+  if (currentTrack && currentTrack !== nt) {
+    const old = currentTrack;
+    const fo = setInterval(() => {
+      if (old.volume > 0.05) old.volume = Math.max(0, old.volume - 0.05);
+      else { old.pause(); old.volume = 0.5; old.currentTime = 0; clearInterval(fo); }
+    }, 50);
+  }
+  currentTrack = nt;
+  currentTrack.volume = 0;
+  musicTargetVol = 0.5;
+  currentTrack.play().catch(() => {});
+  const fi = setInterval(() => {
+    if (currentTrack.volume < musicTargetVol - 0.05)
+      currentTrack.volume = Math.min(musicTargetVol, currentTrack.volume + 0.05);
+    else { currentTrack.volume = musicTargetVol; clearInterval(fi); }
+  }, 50);
+}
+
+function setMusicVolume(v) {
+  musicTargetVol = v;
+  if (currentTrack && !currentTrack.paused) {
+    currentTrack.volume += (v - currentTrack.volume) * 0.05;
+  }
+}
+
+function stopBgMusic() {
+  if (currentTrack) {
+    const tr = currentTrack;
+    const fo = setInterval(() => {
+      if (tr.volume > 0.05) tr.volume = Math.max(0, tr.volume - 0.03);
+      else { tr.pause(); tr.volume = 0.5; clearInterval(fo); }
+    }, 50);
+  }
+}
+
+// ── Input ──
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ── Game State ──
+const GS = { TITLE: 0, PLAYING: 1, TRANS: 2, ENDING: 3, FINAL: 4 };
+let state = GS.TITLE;
+let currentLevel = 0;
+let camera = { x: 0 };
+let transTimer = 0;
+let endingPhase = 0;
+let endingTimer = 0;
+let titlePulse = 0;
+let interacted = false;
+let gameFrames = 0;
+let level3Repeats = 0;
+
+// ══════════════════════════════════════════════
+//  EFFORT METER — tracks consistency
+// ══════════════════════════════════════════════
+let effort = {
+  score: 50,
+  idleFrames: 0,
+  missedMsgs: 0,
+  collectedMem: 0,
+  tooLateCount: 0,
+};
+
+function effortAdd(n) { effort.score = Math.min(100, effort.score + n); }
+function effortSub(n) { effort.score = Math.max(0, effort.score - n); }
+
+// ── Emotional Texts ──
+const hitTexts = [
+  "I should've replied sooner…",
+  "You were waiting for me here…",
+  "I thought I had more time…",
+  "Why did I only realize when it was too late?",
+  "You needed me here…",
+  "I took you for granted…",
+  "One more missed moment…",
+  "I was too busy for what mattered most…",
+  "You kept trying… I kept ignoring…",
+  "I'm sorry I wasn't there…",
+  "I saw this… and still didn't respond…",
+];
+
+const collectTexts = [
+  "I remember this…",
+  "We were so happy here…",
+  "This was our moment…",
+  "I should've held on tighter…",
+  "Your smile in this memory…",
+  "I never want to forget…",
+  "This is what I was fighting for…",
+  "How did I let this slip away?",
+];
+
+const tooLateTexts = [
+  "I was already gone here…",
+  "You missed me again…",
+  "This moment has passed…",
+  "Too slow… like always…",
+  "I waited… you didn't come…",
+];
+
+const levelNames = [
+  "When Everything Was Beautiful",
+  "The First Cracks",
+  "Repeating the Same Mistakes",
+  "Almost There… Please Wait for Me",
+];
+
+let floatingTexts = [];
+let subtitleText = "";
+let subtitleAlpha = 0;
+let darknessOverlay = 0;
+
+function addFloat(text, x, y, color = '#ffb6c1', life = 180) {
+  floatingTexts.push({ text, x, y, alpha: 1, life, color });
+}
+
+// ── Player ──
+const player = {
+  x: 60, y: 400, w: 24, h: 32,
+  vx: 0, vy: 0,
+  onGround: false,
+  facing: 1,
+  frame: 0,
+  frameTimer: 0,
+  invincible: 0,
+  memories: 0,
+  totalMemories: 0,
+};
+
+// ══════════════════════════════════════════════
+//  UNREAD MESSAGES SYSTEM
+// ══════════════════════════════════════════════
+let chatBubbles = [];
+
+const chatMessages = [
+  "Are you there?",
+  "I miss you…",
+  "Can we talk?",
+  "Good morning 💕",
+  "I need you rn…",
+  "Hello?",
+  "You seem busy…",
+  "I'll wait for you…",
+  "Please reply…",
+  "I made something for you",
+  "Remember our place?",
+  "I guess you're asleep…",
+  "It's okay… maybe later",
+  "I just wanted to hear from you",
+];
+
+// ── "TOO LATE" ZONES ──
+let tooLateZones = [];
+
+// ── GIRLFRIEND DISTANCE MECHANIC ──
+let gfVisible = false;
+let gfDistance = 0;
+let gfBaseX = 0;
+
+// ── Level Configuration ──
+const levelConfigs = [
+  { // Level 1 — Happy, bright, easy
+    length: 3000,
+    bgTop: '#3a1a2e', bgBot: '#1a0a15',
+    groundColor: '#d4728e',
+    platformColor: '#c4608a',
+    accentColor: '#ffb6c1',
+    obstacleChance: 0.012,
+    memoryChance: 0.035,
+    msgChance: 0.02,
+    tooLateZones: 1,
+    speed: 1,
+    particles: 'hearts',
+    showGf: false,
+  },
+  { // Level 2 — Slight tension
+    length: 3500,
+    bgTop: '#2a1525', bgBot: '#120810',
+    groundColor: '#a85070',
+    platformColor: '#9a4565',
+    accentColor: '#e8899e',
+    obstacleChance: 0.02,
+    memoryChance: 0.025,
+    msgChance: 0.03,
+    tooLateZones: 2,
+    speed: 1.1,
+    particles: 'rain',
+    showGf: true,
+  },
+  { // Level 3 — Repeated mistakes
+    length: 3800,
+    bgTop: '#1e0e1a', bgBot: '#0a0508',
+    groundColor: '#804060',
+    platformColor: '#703555',
+    accentColor: '#cc6688',
+    obstacleChance: 0.03,
+    memoryChance: 0.02,
+    msgChance: 0.04,
+    tooLateZones: 3,
+    speed: 1.2,
+    particles: 'cracks',
+    showGf: true,
+  },
+  { // Level 4 — Dark, quiet, emotional final
+    length: 2800,
+    bgTop: '#150a12', bgBot: '#050205',
+    groundColor: '#603050',
+    platformColor: '#553045',
+    accentColor: '#aa4466',
+    obstacleChance: 0.02,
+    memoryChance: 0.015,
+    msgChance: 0.02,
+    tooLateZones: 2,
+    speed: 1.0,
+    particles: 'glow',
+    showGf: false,
+  },
+];
+
+let platforms = [];
+let memories = [];
+let obstacles = [];
+let bgParticles = [];
+let girlfriend = null;
+
+const obstacleTypes = [
+  { icon: '📵', label: 'Missed Call' },
+  { icon: '🎮', label: 'Distraction' },
+  { icon: '📱', label: 'Phone' },
+  { icon: '⏰', label: 'Lost Time' },
+  { icon: '😶', label: 'Silence' },
+];
+
+const memoryTypes = [
+  { icon: '📸', label: 'Photo Together' },
+  { icon: '💌', label: 'Love Letter' },
+  { icon: '🌸', label: 'First Date' },
+  { icon: '💕', label: 'Sweet Moment' },
+  { icon: '🎵', label: 'Our Song' },
+  { icon: '✨', label: 'Precious Memory' },
+];
+
+function generateLevel(lvl) {
+  const cfg = levelConfigs[lvl];
+  const repeatMod = (lvl === 2) ? level3Repeats : 0;
+  const effectiveLength = cfg.length + repeatMod * 400;
+
+  platforms = [];
+  memories = [];
+  obstacles = [];
+  chatBubbles = [];
+  tooLateZones = [];
+  bgParticles = [];
+  floatingTexts = [];
+  girlfriend = null;
+  darknessOverlay = 0;
+  gfVisible = cfg.showGf;
+  gfDistance = 500;
+  gfBaseX = 0;
+
+  // Ground
+  platforms.push({ x: 0, y: 460, w: effectiveLength + 200, h: 80, isGround: true });
+
+  // Platforms
+  let px = 180;
+  let lastPy = 460;
+  while (px < effectiveLength - 400) {
+    const pw = 85 + Math.random() * 115;
+    const minY = Math.max(340, lastPy - 85);
+    const maxY = 425;
+    const py = minY + Math.random() * (maxY - minY);
+    platforms.push({ x: px, y: py, w: pw, h: 14, isGround: false });
+    lastPy = py;
+
+    if (Math.random() < cfg.memoryChance * 10) {
+      const mt = memoryTypes[Math.floor(Math.random() * memoryTypes.length)];
+      memories.push({ x: px + pw / 2 - 10, y: py - 28, w: 20, h: 20, ...mt, collected: false });
+    }
+    px += 115 + Math.random() * 135;
+  }
+
+  // Ground memories
+  for (let mx = 150; mx < effectiveLength - 300; mx += 90 + Math.random() * 180) {
+    if (Math.random() < cfg.memoryChance * 7) {
+      const mt = memoryTypes[Math.floor(Math.random() * memoryTypes.length)];
+      memories.push({ x: mx, y: 430, w: 20, h: 20, ...mt, collected: false });
+    }
+  }
+
+  // Obstacles
+  const oScale = 1 + repeatMod * 0.3;
+  for (let ox = 300; ox < effectiveLength - 300; ox += 60 + Math.random() * (150 / oScale)) {
+    if (Math.random() < cfg.obstacleChance * 8 * oScale) {
+      const ot = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
+      obstacles.push({
+        x: ox, y: 430, w: 24, h: 28, ...ot,
+        hit: false, bobOffset: Math.random() * Math.PI * 2,
+        fromMessage: false,
+      });
+    }
+  }
+
+  // Chat Bubbles
+  for (let cx = 250; cx < effectiveLength - 400; cx += 180 + Math.random() * 250) {
+    if (Math.random() < cfg.msgChance * 8) {
+      chatBubbles.push({
+        x: cx, y: 400, w: 30, h: 26,
+        text: chatMessages[Math.floor(Math.random() * chatMessages.length)],
+        state: 'active',
+        wallSpawned: false,
+      });
+    }
+  }
+
+  // "Too Late" Zones
+  const zCount = cfg.tooLateZones + repeatMod;
+  const zSpacing = effectiveLength / (zCount + 2);
+  for (let i = 0; i < zCount; i++) {
+    const zx = zSpacing * (i + 1) + Math.random() * 200 - 100;
+    tooLateZones.push({
+      x: zx,
+      w: 200 + Math.random() * 150,
+      timeLimit: 280 - lvl * 40 - repeatMod * 30,
+      timer: 0,
+      triggered: false,
+      failed: false,
+      passed: false,
+    });
+  }
+
+  // Particles
+  for (let i = 0; i < 60; i++) {
+    bgParticles.push({
+      x: Math.random() * effectiveLength,
+      y: Math.random() * 460,
+      size: 1 + Math.random() * 3,
+      speed: 0.2 + Math.random() * 0.5,
+      alpha: 0.1 + Math.random() * 0.4,
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
+
+  // Girlfriend at end of final level
+  if (lvl === 3) {
+    girlfriend = { x: effectiveLength - 150, y: 428, w: 24, h: 32, alpha: 1 };
+  }
+
+  // Reset player
+  player.x = 60;
+  player.y = 400;
+  player.vx = 0;
+  player.vy = 0;
+  player.onGround = false;
+  player.invincible = 0;
+
+  if (lvl === 2 && level3Repeats > 0) {
+    subtitleText = "We've been here before…";
+  } else {
+    subtitleText = levelNames[lvl];
+  }
+  subtitleAlpha = 1;
+}
+
+// ── Physics ──
+const GRAVITY = 0.45;
+const JUMP_FORCE = -11;
+const MOVE_SPEED = 4.2;
+const FRICTION = 0.87;
+
+function getEffLen() {
+  const cfg = levelConfigs[currentLevel];
+  return cfg.length + ((currentLevel === 2) ? level3Repeats : 0) * 400;
+}
+
+function updatePlayer() {
+  const cfg = levelConfigs[currentLevel];
+  const spd = MOVE_SPEED * cfg.speed;
+  const effLen = getEffLen();
+  gameFrames++;
+
+  let moving = false;
+  if (keys['ArrowLeft'] || keys['KeyA']) { player.vx -= spd * 0.3; player.facing = -1; moving = true; }
+  if (keys['ArrowRight'] || keys['KeyD']) { player.vx += spd * 0.3; player.facing = 1; moving = true; }
+  if ((keys['ArrowUp'] || keys['KeyW'] || keys['Space']) && player.onGround) {
+    player.vy = JUMP_FORCE; player.onGround = false; sfxJump();
+  }
+
+  // Effort: idle penalty
+  if (!moving && player.onGround) {
+    effort.idleFrames++;
+    if (effort.idleFrames > 120) effortSub(0.02);
+  } else {
+    effort.idleFrames = 0;
+    if (moving) effortAdd(0.005);
+  }
+
+  player.vx *= FRICTION;
+  player.vy += GRAVITY;
+  if (Math.abs(player.vx) < 0.1) player.vx = 0;
+  if (player.vy > 12) player.vy = 12;
+
+  // Move X
+  player.x += player.vx;
+  for (const p of platforms) {
+    if (p.isGround && rectCollide(player, p)) {
+      if (player.vx > 0) player.x = p.x - player.w;
+      else player.x = p.x + p.w;
+      player.vx = 0;
+    }
+  }
+
+  // Move Y (one-way platforms)
+  const prevY = player.y;
+  player.y += player.vy;
+  player.onGround = false;
+  for (const p of platforms) {
+    if (rectCollide(player, p)) {
+      if (p.isGround) {
+        if (player.vy > 0) { player.y = p.y - player.h; player.vy = 0; player.onGround = true; }
+        else { player.y = p.y + p.h; player.vy = 0; }
+      } else {
+        if (player.vy > 0 && prevY + player.h <= p.y + 4) {
+          player.y = p.y - player.h; player.vy = 0; player.onGround = true;
+        }
+      }
+    }
+  }
+
+  if (player.x < 0) player.x = 0;
+  if (player.y > 520) { player.y = 428; player.vy = 0; player.vx = 0; effortSub(2); }
+
+  player.frameTimer++;
+  if (Math.abs(player.vx) > 0.5) {
+    if (player.frameTimer % 8 === 0) player.frame = (player.frame + 1) % 4;
+  } else player.frame = 0;
+
+  if (player.invincible > 0) player.invincible--;
+
+  // Camera
+  const tc = player.x - 200;
+  camera.x += (tc - camera.x) * 0.08;
+  if (camera.x < 0) camera.x = 0;
+  if (camera.x > effLen - canvas.width) camera.x = effLen - canvas.width;
+
+  // Memory collection
+  for (const m of memories) {
+    if (!m.collected && rectCollide(player, m)) {
+      m.collected = true;
+      player.memories++;
+      player.totalMemories++;
+      effort.collectedMem++;
+      effortAdd(3);
+      sfxCollect();
+      addFloat(collectTexts[Math.floor(Math.random() * collectTexts.length)], m.x - camera.x, m.y - 20, '#ffddee');
+      addFloat(m.icon + ' ' + m.label, m.x - camera.x, m.y - 40, '#ffb6c1');
+    }
+  }
+
+  // Obstacle collision
+  if (player.invincible <= 0) {
+    for (const o of obstacles) {
+      if (!o.hit && rectCollide(player, o)) {
+        o.hit = true;
+        player.invincible = 90;
+        effortSub(3);
+        sfxHit();
+        addFloat(hitTexts[Math.floor(Math.random() * hitTexts.length)], player.x - camera.x, player.y - 40, '#ff6688');
+        player.vx = -player.facing * 4;
+        player.vy = -4;
+      }
+    }
+  }
+
+  // ── UNREAD MESSAGES ──
+  for (const cb of chatBubbles) {
+    if (cb.state === 'active') {
+      if (rectCollide(player, cb)) {
+        cb.state = 'collected';
+        effortAdd(5);
+        sfxMessage();
+        addFloat('💬 "' + cb.text + '"', cb.x - camera.x, cb.y - 30, '#aaddff', 240);
+        addFloat('Read ✓', cb.x - camera.x, cb.y - 50, '#88ffaa');
+      } else if (player.x > cb.x + 150) {
+        cb.state = 'ignored';
+        effort.missedMsgs++;
+        effortSub(4);
+        addFloat('"' + cb.text + '"', cb.x - camera.x, cb.y - 25, '#ff888888', 200);
+        addFloat('Left on read…', cb.x - camera.x, cb.y - 45, '#ff6666');
+      }
+    }
+    if (cb.state === 'ignored' && !cb.wallSpawned) {
+      cb.wallSpawned = true;
+      const wx = player.x + 300 + Math.random() * 200;
+      obstacles.push({
+        x: wx, y: 420, w: 35, h: 40,
+        icon: '💬', label: 'Unread: "' + cb.text.substring(0, 15) + '…"',
+        hit: false, bobOffset: Math.random() * Math.PI * 2,
+        fromMessage: true,
+      });
+    }
+  }
+
+  // ── "TOO LATE" ZONES ──
+  for (const z of tooLateZones) {
+    if (z.passed || z.failed) continue;
+    const inside = player.x >= z.x && player.x <= z.x + z.w;
+    if (inside && !z.triggered) { z.triggered = true; z.timer = 0; }
+    if (z.triggered && !z.passed && !z.failed) {
+      z.timer++;
+      if (player.x > z.x + z.w) {
+        z.passed = true;
+        effortAdd(5);
+        addFloat('Made it…', player.x - camera.x, player.y - 40, '#88ffaa');
+      } else if (z.timer > z.timeLimit) {
+        z.failed = true;
+        effort.tooLateCount++;
+        effortSub(8);
+        sfxTooLate();
+        darknessOverlay = Math.min(0.6, darknessOverlay + 0.15);
+        setMusicVolume(Math.max(0.15, musicTargetVol - 0.1));
+        addFloat(tooLateTexts[Math.floor(Math.random() * tooLateTexts.length)], player.x - camera.x, player.y - 50, '#cc4466', 240);
+      }
+    }
+  }
+
+  // ── GIRLFRIEND DISTANCE ──
+  if (gfVisible) {
+    const ps = Math.abs(player.vx);
+    if (ps > 2) gfDistance = Math.max(200, gfDistance - 0.3);
+    else if (ps < 0.5) gfDistance = Math.min(700, gfDistance + 0.5);
+    gfBaseX = player.x + gfDistance;
+  }
+
+  // Darkness recovery
+  if (effort.score > 60) {
+    darknessOverlay = Math.max(0, darknessOverlay - 0.001);
+    setMusicVolume(Math.min(0.5, musicTargetVol + 0.002));
+  }
+
+  // Level completion
+  if (currentLevel < 3 && player.x > effLen - 100) {
+    if (currentLevel === 2 && effort.score < 45 && level3Repeats < 2) {
+      level3Repeats++;
+    } else {
+      // normal advance
+    }
+    state = GS.TRANS;
+    transTimer = 0;
+  }
+
+  // Final — reach girlfriend
+  if (girlfriend && Math.abs(player.x - girlfriend.x) < 50 && Math.abs(player.y - girlfriend.y) < 50) {
+    state = GS.ENDING;
+    endingPhase = 0;
+    endingTimer = 0;
+    stopBgMusic();
+  }
+}
+
+function rectCollide(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ═══════════════════════════
+//  DRAWING
+// ═══════════════════════════
+
+function drawPixelChar(x, y, w, h, facing, frame, isGirl = false, alpha = 1) {
+  const sx = x - camera.x;
+  if (sx < -50 || sx > canvas.width + 50) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const bb = (frame === 1 || frame === 3) ? -1 : 0;
+  ctx.fillStyle = isGirl ? '#ff8faf' : '#77bbff';
+  ctx.fillRect(sx + 4, y + 8 + bb, w - 8, h - 16);
+  ctx.fillStyle = isGirl ? '#ffd1dc' : '#ffccaa';
+  ctx.fillRect(sx + 4, y + bb, w - 8, 10);
+  ctx.fillStyle = isGirl ? '#cc5577' : '#5a3a28';
+  ctx.fillRect(sx + 2, y - 2 + bb, w - 4, 5);
+  if (isGirl) {
+    ctx.fillRect(sx + 2, y + 3 + bb, 4, 12);
+    ctx.fillRect(sx + w - 6, y + 3 + bb, 4, 12);
+  }
+  ctx.fillStyle = '#333';
+  if (isGirl) {
+    ctx.fillRect(sx + 7, y + 4 + bb, 3, 3);
+    ctx.fillRect(sx + 14, y + 4 + bb, 3, 3);
+    ctx.fillStyle = '#ff9fbb88';
+    ctx.fillRect(sx + 5, y + 6 + bb, 4, 2);
+    ctx.fillRect(sx + 15, y + 6 + bb, 4, 2);
+  } else {
+    const ex = facing > 0 ? 2 : 0;
+    ctx.fillRect(sx + 8 + ex, y + 4 + bb, 2, 2);
+    ctx.fillRect(sx + 14 + ex, y + 4 + bb, 2, 2);
+  }
+  ctx.fillStyle = isGirl ? '#cc5577' : '#445588';
+  if (frame === 1) { ctx.fillRect(sx + 5, y + h - 8, 5, 8); ctx.fillRect(sx + 14, y + h - 6, 5, 6); }
+  else if (frame === 3) { ctx.fillRect(sx + 5, y + h - 6, 5, 6); ctx.fillRect(sx + 14, y + h - 8, 5, 8); }
+  else { ctx.fillRect(sx + 6, y + h - 8, 5, 8); ctx.fillRect(sx + 13, y + h - 8, 5, 8); }
+  if (isGirl) { ctx.fillStyle = '#ff6f8f'; ctx.fillRect(sx + 2, y + 16 + bb, w - 4, 6); }
+  ctx.restore();
+  if (isGirl) {
+    ctx.save();
+    ctx.globalAlpha = (0.15 + Math.sin(Date.now() * 0.003) * 0.1) * alpha;
+    ctx.shadowColor = '#ff69b4'; ctx.shadowBlur = 20;
+    ctx.fillStyle = '#ff69b4';
+    ctx.beginPath(); ctx.arc(sx + w / 2, y + h / 2, 25, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawBackground(lvl) {
+  const cfg = levelConfigs[lvl];
+  const grad = ctx.createLinearGradient(0, 0, 0, 460);
+  grad.addColorStop(0, cfg.bgTop); grad.addColorStop(1, cfg.bgBot);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const time = Date.now() * 0.001;
+  for (const p of bgParticles) {
+    const ppx = ((p.x - camera.x * 0.3) % canvas.width + canvas.width) % canvas.width;
+    const ppy = p.y + Math.sin(time + p.phase) * 10;
+    ctx.globalAlpha = p.alpha * (0.5 + Math.sin(time * 2 + p.phase) * 0.5);
+    if (cfg.particles === 'hearts' && p.size > 2) {
+      ctx.fillStyle = '#ff69b4'; ctx.font = `${8 + p.size * 2}px serif`; ctx.fillText('♥', ppx, ppy);
+    } else if (cfg.particles === 'rain') {
+      ctx.fillStyle = '#8888cc'; ctx.fillRect(ppx, ppy, 1, 4 + p.size * 2);
+    } else if (cfg.particles === 'cracks') {
+      ctx.fillStyle = '#664444'; ctx.fillRect(ppx, ppy, p.size, p.size);
+    } else if (cfg.particles === 'glow') {
+      ctx.fillStyle = '#ff69b4'; ctx.beginPath(); ctx.arc(ppx, ppy, p.size, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.fillStyle = cfg.accentColor; ctx.fillRect(ppx, ppy, p.size, p.size);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawPlatforms(lvl) {
+  const cfg = levelConfigs[lvl];
+  for (const p of platforms) {
+    const sx = p.x - camera.x;
+    if (sx + p.w < -50 || sx > canvas.width + 50) continue;
+    if (p.isGround) {
+      const gg = ctx.createLinearGradient(0, p.y, 0, p.y + p.h);
+      gg.addColorStop(0, cfg.groundColor); gg.addColorStop(1, cfg.bgBot);
+      ctx.fillStyle = gg; ctx.fillRect(sx, p.y, p.w, p.h);
+      ctx.fillStyle = cfg.accentColor; ctx.fillRect(sx, p.y, p.w, 3);
+    } else {
+      ctx.fillStyle = cfg.platformColor; ctx.fillRect(sx, p.y, p.w, p.h);
+      ctx.fillStyle = cfg.accentColor + '44'; ctx.fillRect(sx, p.y, p.w, 3);
+    }
+  }
+}
+
+function drawMemories() {
+  const t = Date.now() * 0.003;
+  for (const m of memories) {
+    if (m.collected) continue;
+    const sx = m.x - camera.x;
+    if (sx < -30 || sx > canvas.width + 30) continue;
+    const bob = Math.sin(t + m.x * 0.01) * 4;
+    ctx.save();
+    ctx.globalAlpha = 0.3 + Math.sin(t * 2) * 0.15;
+    ctx.shadowColor = '#ffb6c1'; ctx.shadowBlur = 15; ctx.fillStyle = '#ffb6c1';
+    ctx.beginPath(); ctx.arc(sx + m.w / 2, m.y + bob + m.h / 2, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    ctx.font = '16px serif'; ctx.fillText(m.icon, sx, m.y + bob + 16);
+  }
+}
+
+function drawObstacles() {
+  const t = Date.now() * 0.003;
+  for (const o of obstacles) {
+    if (o.hit) continue;
+    const sx = o.x - camera.x;
+    if (sx < -30 || sx > canvas.width + 30) continue;
+    const bob = Math.sin(t + o.bobOffset) * 3;
+    ctx.save();
+    if (o.fromMessage) {
+      ctx.globalAlpha = 0.35; ctx.fillStyle = '#6644aa'; ctx.shadowColor = '#6644aa'; ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.arc(sx + o.w / 2, o.y + bob + o.h / 2, 18, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      ctx.font = '20px serif'; ctx.fillText('💬', sx, o.y + bob + 20);
+      ctx.save(); ctx.globalAlpha = 0.6; ctx.fillStyle = '#ff4444'; ctx.font = 'bold 14px serif';
+      ctx.fillText('✕', sx + 18, o.y + bob + 8); ctx.restore();
+    } else {
+      ctx.globalAlpha = 0.2; ctx.fillStyle = '#ff4466'; ctx.shadowColor = '#ff4466'; ctx.shadowBlur = 10;
+      ctx.beginPath(); ctx.arc(sx + o.w / 2, o.y + bob + o.h / 2, 14, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      ctx.font = '18px serif'; ctx.fillText(o.icon, sx, o.y + bob + 18);
+    }
+  }
+}
+
+function drawChatBubbles() {
+  const t = Date.now() * 0.003;
+  for (const cb of chatBubbles) {
+    if (cb.state !== 'active') continue;
+    const sx = cb.x - camera.x;
+    if (sx < -60 || sx > canvas.width + 60) continue;
+    const bob = Math.sin(t + cb.x * 0.01) * 3;
+    const pulse = 0.8 + Math.sin(t * 3) * 0.2;
+    ctx.save();
+    const bw = 120, bh = 36;
+    const bx = sx - bw / 2 + cb.w / 2;
+    const by = cb.y - 40 + bob;
+    // Bubble
+    ctx.globalAlpha = 0.9; ctx.fillStyle = '#ffffff18'; ctx.strokeStyle = '#ffb6c166'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bx + 6, by); ctx.lineTo(bx + bw - 6, by);
+    ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + 6);
+    ctx.lineTo(bx + bw, by + bh - 6);
+    ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - 6, by + bh);
+    ctx.lineTo(bx + 6, by + bh);
+    ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - 6);
+    ctx.lineTo(bx, by + 6);
+    ctx.quadraticCurveTo(bx, by, bx + 6, by);
+    ctx.fill(); ctx.stroke();
+    // Tail
+    ctx.beginPath();
+    ctx.moveTo(bx + bw / 2 - 5, by + bh);
+    ctx.lineTo(bx + bw / 2, by + bh + 8);
+    ctx.lineTo(bx + bw / 2 + 5, by + bh);
+    ctx.fillStyle = '#ffffff18'; ctx.fill();
+    // Text
+    ctx.globalAlpha = pulse; ctx.fillStyle = '#ffddee';
+    ctx.font = '11px Georgia, serif'; ctx.textAlign = 'center';
+    ctx.fillText(cb.text, bx + bw / 2, by + 15);
+    ctx.globalAlpha = 0.4; ctx.fillStyle = '#ffb6c1';
+    ctx.font = '9px Georgia, serif';
+    ctx.fillText('walk into to read', bx + bw / 2, by + 28);
+    // Notification dot
+    ctx.globalAlpha = pulse; ctx.fillStyle = '#ff4466';
+    ctx.beginPath(); ctx.arc(bx + bw - 4, by + 4, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawTooLateZones() {
+  for (const z of tooLateZones) {
+    const sx = z.x - camera.x;
+    if (sx + z.w < -10 || sx > canvas.width + 10) continue;
+    if (z.triggered && !z.passed && !z.failed) {
+      const prog = z.timer / z.timeLimit;
+      ctx.save();
+      ctx.globalAlpha = 0.08 + prog * 0.15;
+      ctx.fillStyle = prog > 0.7 ? '#ff2244' : '#ffaa44';
+      ctx.fillRect(sx, 0, z.w, 460);
+      ctx.restore();
+      // Timer bar
+      ctx.save(); ctx.globalAlpha = 0.7;
+      ctx.fillStyle = '#33111188'; ctx.fillRect(sx, 8, z.w, 6);
+      const rem = 1 - prog;
+      ctx.fillStyle = rem > 0.3 ? '#ffaa44' : '#ff2244';
+      ctx.fillRect(sx, 8, z.w * rem, 6);
+      ctx.restore();
+    }
+    if (z.failed) {
+      ctx.save(); ctx.globalAlpha = 0.2; ctx.fillStyle = '#110011';
+      ctx.fillRect(sx, 0, z.w, 460); ctx.restore();
+    }
+  }
+}
+
+function drawDistantGirlfriend() {
+  if (!gfVisible) return;
+  const gsx = gfBaseX - camera.x;
+  if (gsx < 0 || gsx > canvas.width + 100) return;
+  const dn = Math.min(1, gfDistance / 700);
+  const sc = 0.6 + (1 - dn) * 0.4;
+  const al = 0.3 + (1 - dn) * 0.5;
+  ctx.save(); ctx.globalAlpha = al;
+  ctx.shadowColor = '#ff69b4'; ctx.shadowBlur = 15 * (1 - dn);
+  const gy = 460 - 32 * sc;
+  const gw = 24 * sc;
+  ctx.fillStyle = '#ff8faf'; ctx.fillRect(gsx + 4 * sc, gy + 8 * sc, gw - 8 * sc, 32 * sc - 16 * sc);
+  ctx.fillStyle = '#ffd1dc'; ctx.fillRect(gsx + 4 * sc, gy, gw - 8 * sc, 10 * sc);
+  ctx.fillStyle = '#cc5577';
+  ctx.fillRect(gsx + 2 * sc, gy - 2 * sc, gw - 4 * sc, 5 * sc);
+  ctx.fillRect(gsx + 2 * sc, gy + 3 * sc, 4 * sc, 12 * sc);
+  ctx.fillRect(gsx + gw - 6 * sc, gy + 3 * sc, 4 * sc, 12 * sc);
+  ctx.fillStyle = '#ff6f8f'; ctx.fillRect(gsx + 2 * sc, gy + 16 * sc, gw - 4 * sc, 6 * sc);
+  ctx.restore();
+  // Distance hint
+  ctx.save();
+  if (dn > 0.5) {
+    ctx.globalAlpha = 0.3; ctx.fillStyle = '#ffb6c1';
+    ctx.font = 'italic 11px Georgia, serif'; ctx.textAlign = 'center';
+    ctx.fillText("she's getting further…", gsx + gw / 2, gy - 12);
+  } else if (dn < 0.35) {
+    ctx.globalAlpha = 0.4; ctx.fillStyle = '#88ffaa';
+    ctx.font = 'italic 11px Georgia, serif'; ctx.textAlign = 'center';
+    ctx.fillText('almost…', gsx + gw / 2, gy - 12);
+  }
+  ctx.restore();
+}
+
+function drawFloatingTexts() {
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const ft = floatingTexts[i];
+    ft.y -= 0.5; ft.life--;
+    ft.alpha = Math.min(1, ft.life / 60);
+    if (ft.life <= 0) { floatingTexts.splice(i, 1); continue; }
+    ctx.save(); ctx.globalAlpha = ft.alpha; ctx.fillStyle = ft.color;
+    ctx.font = 'italic 14px Georgia, serif'; ctx.textAlign = 'center';
+    ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
+    ctx.fillText(ft.text, ft.x, ft.y); ctx.restore();
+  }
+}
+
+function drawHUD() {
+  ctx.save();
+  ctx.fillStyle = '#ffb6c1'; ctx.font = '15px Georgia, serif';
+  ctx.textAlign = 'left'; ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
+  ctx.fillText(`💕 Memories: ${player.memories}`, 20, 28);
+  ctx.fillStyle = '#ffddee88'; ctx.font = '11px Georgia, serif';
+  if (currentLevel === 2 && level3Repeats > 0)
+    ctx.fillText(`Level 3 (attempt ${level3Repeats + 1})`, 20, 46);
+  else ctx.fillText(`Level ${currentLevel + 1} / 4`, 20, 46);
+
+  // Effort Meter
+  const mx = canvas.width - 180, my = 18, mw = 150, mh = 12;
+  ctx.fillStyle = '#ffddee88'; ctx.font = '10px Georgia, serif'; ctx.textAlign = 'right';
+  ctx.fillText('Effort', mx - 6, my + 10);
+  ctx.fillStyle = '#ffffff10'; ctx.fillRect(mx, my, mw, mh);
+  const ep = effort.score / 100;
+  ctx.fillStyle = ep > 0.6 ? '#88ddaa' : ep > 0.35 ? '#ddaa55' : '#dd5566';
+  ctx.fillRect(mx, my, mw * ep, mh);
+  ctx.strokeStyle = '#ffb6c133'; ctx.lineWidth = 1; ctx.strokeRect(mx, my, mw, mh);
+  ctx.fillStyle = '#ffddee66'; ctx.font = '9px Georgia, serif'; ctx.textAlign = 'center';
+  ctx.fillText(ep > 0.6 ? 'Consistent ♥' : ep > 0.35 ? 'Wavering…' : 'Fading away…', mx + mw / 2, my + 24);
+  if (effort.missedMsgs > 0) {
+    ctx.fillStyle = '#ff666688'; ctx.font = '10px Georgia, serif'; ctx.textAlign = 'right';
+    ctx.fillText(`💬 Unread: ${effort.missedMsgs}`, canvas.width - 30, my + 38);
+  }
+  if (subtitleAlpha > 0) {
+    subtitleAlpha -= 0.003; ctx.globalAlpha = Math.max(0, subtitleAlpha);
+    ctx.fillStyle = '#ffddee'; ctx.font = 'italic 22px Georgia, serif'; ctx.textAlign = 'center';
+    ctx.fillText(subtitleText, canvas.width / 2, 80);
+  }
+  ctx.restore();
+}
+
+function drawDarkness() {
+  if (darknessOverlay <= 0) return;
+  ctx.save(); ctx.globalAlpha = darknessOverlay; ctx.fillStyle = '#050005';
+  ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.restore();
+}
+
+// ── Title Screen ──
+function drawTitle() {
+  titlePulse += 0.02;
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#2a0a1a'); grad.addColorStop(1, '#0a0208');
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const time = Date.now() * 0.001;
+  for (let i = 0; i < 20; i++) {
+    const hx = (Math.sin(time * 0.3 + i * 1.5) * 0.5 + 0.5) * canvas.width;
+    const hy = ((time * 0.05 + i * 0.15) % 1) * canvas.height;
+    ctx.globalAlpha = 0.1 + Math.sin(time + i) * 0.08;
+    ctx.fillStyle = '#ff69b4'; ctx.font = `${12 + Math.sin(i) * 6}px serif`; ctx.fillText('♥', hx, hy);
+  }
+  ctx.globalAlpha = 1;
+  // Title
+  ctx.save(); ctx.textAlign = 'center';
+  ctx.fillStyle = '#ff69b4'; ctx.shadowColor = '#ff69b4';
+  ctx.shadowBlur = 20 + Math.sin(titlePulse) * 10;
+  ctx.font = 'bold 52px Georgia, serif'; ctx.fillText('Find Her', canvas.width / 2, 180);
+  ctx.restore();
+  ctx.save(); ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffb6c1aa'; ctx.font = 'italic 17px Georgia, serif';
+  ctx.fillText('"A journey through the memories I almost forgot…"', canvas.width / 2, 225);
+  ctx.restore();
+  // Feature hints
+  ctx.save(); ctx.textAlign = 'center'; ctx.fillStyle = '#ffb6c155'; ctx.font = '12px Georgia, serif';
+  ctx.fillText("Read her messages. Don't be too late. Stay consistent.", canvas.width / 2, 270);
+  ctx.fillText('Your effort determines the ending.', canvas.width / 2, 288);
+  ctx.restore();
+  // Start
+  ctx.save(); ctx.textAlign = 'center';
+  ctx.globalAlpha = 0.5 + Math.sin(titlePulse * 2) * 0.3;
+  ctx.fillStyle = '#ffddee'; ctx.font = '16px Georgia, serif';
+  ctx.fillText('Press ENTER or SPACE to begin', canvas.width / 2, 370);
+  ctx.restore();
+  ctx.save(); ctx.textAlign = 'center'; ctx.fillStyle = '#ffb6c166'; ctx.font = '13px Georgia, serif';
+  ctx.fillText('Arrow Keys / WASD to move  •  Space / Up to jump', canvas.width / 2, 410);
+  ctx.restore();
+}
+
+// ── Level Transition ──
+function drawLevelTransition() {
+  transTimer++;
+  const alpha = transTimer < 60 ? transTimer / 60 : transTimer < 180 ? 1 : Math.max(0, 1 - (transTimer - 180) / 60);
+  ctx.fillStyle = `rgba(10, 2, 8, ${alpha})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (transTimer > 40 && transTimer < 200) {
+    ctx.save(); ctx.textAlign = 'center';
+    ctx.globalAlpha = Math.min(1, (transTimer - 40) / 30) * Math.min(1, (200 - transTimer) / 30);
+    // Determine next level
+    const isRepeat = (currentLevel === 2 && effort.score < 45 && level3Repeats > 0 && level3Repeats <= 2);
+    ctx.fillStyle = '#ffb6c1'; ctx.font = 'italic 24px Georgia, serif';
+    if (isRepeat) {
+      ctx.fillText("We've been here before…", canvas.width / 2, canvas.height / 2 - 20);
+      ctx.fillStyle = '#ff666688'; ctx.font = '14px Georgia, serif';
+      ctx.fillText('The mistakes repeat…', canvas.width / 2, canvas.height / 2 + 15);
+    } else {
+      const nl = currentLevel + 1;
+      ctx.fillText(levelNames[nl] || '', canvas.width / 2, canvas.height / 2 - 10);
+      ctx.fillStyle = '#ffddee88'; ctx.font = '14px Georgia, serif';
+      ctx.fillText(`Level ${nl + 1}`, canvas.width / 2, canvas.height / 2 + 25);
+    }
+    ctx.restore();
+  }
+
+  if (transTimer > 240) {
+    if (currentLevel === 2 && effort.score < 45 && level3Repeats > 0 && level3Repeats <= 2) {
+      generateLevel(2);
+    } else {
+      currentLevel++;
+      if (currentLevel > 3) currentLevel = 3;
+      generateLevel(currentLevel);
+    }
+    state = GS.PLAYING;
+    startBgMusic(currentLevel);
+  }
+}
+
+// ── Endings ──
+const lowEndMsgs = [
+  { text: "You came… but not when I needed you.", dur: 300 },
+  { text: "Every message I sent… you saw them all, didn't you?", dur: 280 },
+  { text: "I kept waiting… and you kept being late.", dur: 280 },
+  { text: "", dur: 60 },
+];
+const highEndMsgs = [
+  { text: "You're here… this time, you didn't wait too long.", dur: 300 },
+  { text: "I felt you trying… every step, every message you read.", dur: 300 },
+  { text: "Maybe this time… it'll be different.", dur: 280 },
+  { text: "", dur: 60 },
+];
+const lowFinalMsg = "Some people don't realize what they have… until it's standing right there, fading away.";
+const highFinalMsg = "Some things can still be fixed… but only if you keep showing up.";
+
+function endType() { return effort.score >= 50 ? 'high' : 'low'; }
+
+function drawEnding() {
+  endingTimer++;
+  const et = endType();
+  const msgs = et === 'high' ? highEndMsgs : lowEndMsgs;
+  drawBackground(3); drawPlatforms(3);
+  const cx = canvas.width / 2;
+  drawPixelChar(camera.x + cx - 60, 428, 24, 32, 1, 0, false);
+  if (et === 'low') {
+    const gfA = endingTimer < 120 ? 1 : Math.max(0, 1 - (endingTimer - 120) / 200);
+    drawPixelChar(camera.x + cx + 36, 428, 24, 32, -1, 0, true, gfA);
+  } else {
+    drawPixelChar(camera.x + cx + 36, 428, 24, 32, -1, 0, true);
+  }
+  if (endingPhase < msgs.length) {
+    const msg = msgs[endingPhase];
+    if (endingTimer > msg.dur) { endingTimer = 0; endingPhase++; }
+    else if (msg.text) {
+      const a = Math.min(1, endingTimer / 60) * Math.min(1, (msg.dur - endingTimer) / 60);
+      ctx.save(); ctx.textAlign = 'center'; ctx.globalAlpha = a;
+      ctx.fillStyle = et === 'high' ? '#ddffee' : '#ffddee';
+      ctx.font = 'italic 20px Georgia, serif'; ctx.shadowColor = '#000'; ctx.shadowBlur = 8;
+      wrapText(msg.text, cx, 180, 700); ctx.restore();
+    }
+  } else { state = GS.FINAL; endingTimer = 0; }
+  if (et === 'low') {
+    ctx.save(); ctx.globalAlpha = Math.min(0.4, endingTimer * 0.001);
+    ctx.fillStyle = '#050005'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.restore();
+  }
+}
+
+function drawFinal() {
+  endingTimer++;
+  const et = endType();
+  const fm = et === 'high' ? highFinalMsg : lowFinalMsg;
+  const ba = Math.min(1, endingTimer / 120);
+  ctx.fillStyle = `rgba(5, 2, 5, ${ba})`; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (endingTimer > 150) {
+    const a = Math.min(1, (endingTimer - 150) / 90);
+    ctx.save(); ctx.textAlign = 'center'; ctx.globalAlpha = a;
+    ctx.fillStyle = et === 'high' ? '#88ddaa' : '#ff69b4';
+    ctx.font = 'italic 20px Georgia, serif';
+    ctx.shadowColor = et === 'high' ? '#88ddaa' : '#ff69b4'; ctx.shadowBlur = 15;
+    wrapText(fm, canvas.width / 2, canvas.height / 2 - 30, 750);
+    if (endingTimer > 250) {
+      const ma = Math.min(1, (endingTimer - 250) / 60);
+      ctx.globalAlpha = ma * 0.7; ctx.fillStyle = '#ffb6c1';
+      ctx.font = '14px Georgia, serif'; ctx.shadowBlur = 0;
+      ctx.fillText(`💕 ${player.totalMemories} memories collected`, canvas.width / 2, canvas.height / 2 + 20);
+      ctx.fillText(`💬 ${effort.missedMsgs} messages left unread`, canvas.width / 2, canvas.height / 2 + 40);
+      ctx.fillText(`⏰ ${effort.tooLateCount} times too late`, canvas.width / 2, canvas.height / 2 + 60);
+      ctx.globalAlpha = ma * 0.5;
+      ctx.fillStyle = et === 'high' ? '#88ddaa' : '#ff6666';
+      ctx.font = 'italic 13px Georgia, serif';
+      ctx.fillText(
+        et === 'high' ? 'You were consistent. You showed up.' : 'You were inconsistent. You kept her waiting.',
+        canvas.width / 2, canvas.height / 2 + 85
+      );
+    }
+    if (endingTimer > 450) {
+      ctx.globalAlpha = 0.4 + Math.sin(endingTimer * 0.03) * 0.2;
+      ctx.fillStyle = '#ffddee'; ctx.font = '14px Georgia, serif';
+      ctx.fillText('Press ENTER to start again', canvas.width / 2, canvas.height / 2 + 120);
+    }
+    ctx.restore();
+  }
+  if (endingTimer > 450 && (keys['Enter'] || keys['Space'])) {
+    currentLevel = 0; level3Repeats = 0;
+    player.memories = 0; player.totalMemories = 0;
+    effort = { score: 50, idleFrames: 0, missedMsgs: 0, collectedMem: 0, tooLateCount: 0 };
+    darknessOverlay = 0; generateLevel(0); state = GS.PLAYING; startBgMusic(0);
+  }
+}
+
+function wrapText(text, x, y, maxW) {
+  const words = text.split(' '); let lines = [''];
+  ctx.font = 'italic 20px Georgia, serif';
+  for (const w of words) {
+    const test = lines[lines.length - 1] + (lines[lines.length - 1] ? ' ' : '') + w;
+    if (ctx.measureText(test).width > maxW) lines.push(w);
+    else lines[lines.length - 1] = test;
+  }
+  lines.forEach((l, i) => ctx.fillText(l, x, y + i * 28));
+}
+
+// ── Main Loop ──
+function update() { if (state === GS.PLAYING) updatePlayer(); }
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  switch (state) {
+    case GS.TITLE:
+      drawTitle();
+      if ((keys['Enter'] || keys['Space']) && !interacted) interacted = true;
+      if (interacted && !keys['Enter'] && !keys['Space']) {
+        initAudio(); createReverb();
+        currentLevel = 0; level3Repeats = 0;
+        player.memories = 0; player.totalMemories = 0;
+        effort = { score: 50, idleFrames: 0, missedMsgs: 0, collectedMem: 0, tooLateCount: 0 };
+        darknessOverlay = 0; gameFrames = 0;
+        generateLevel(0); state = GS.PLAYING; startBgMusic(0);
+      }
+      break;
+    case GS.PLAYING:
+      drawBackground(currentLevel);
+      drawTooLateZones();
+      drawPlatforms(currentLevel);
+      drawMemories();
+      drawObstacles();
+      drawChatBubbles();
+      drawDistantGirlfriend();
+      if (player.invincible <= 0 || Math.floor(player.invincible / 4) % 2 === 0)
+        drawPixelChar(player.x, player.y, player.w, player.h, player.facing, player.frame, false);
+      if (girlfriend) drawPixelChar(girlfriend.x, girlfriend.y, girlfriend.w, girlfriend.h, -1, 0, true);
+      drawFloatingTexts();
+      drawDarkness();
+      drawHUD();
+      break;
+    case GS.TRANS:
+      drawBackground(currentLevel); drawPlatforms(currentLevel);
+      drawLevelTransition();
+      break;
+    case GS.ENDING: drawEnding(); break;
+    case GS.FINAL: drawFinal(); break;
+  }
+}
+
+function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
+gameLoop();
+</script>
+</body>
+</html>

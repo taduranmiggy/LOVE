@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Find Her</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a0a10;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: 'Segoe UI', 'Georgia', serif;
+}
+canvas {
+  border: 2px solid #ff69b455;
+  border-radius: 8px;
+  box-shadow: 0 0 40px #ff69b433;
+  image-rendering: pixelated;
+}
+</style>
+</head>
+<body>
+<canvas id="game" width="960" height="540"></canvas>
+
+<!-- Background Music: One song per level -->
+<audio id="bg-music-0" src="The 1975 - fallingforyou.mp3" preload="auto"></audio>
+<audio id="bg-music-1" src="Old Love - Yuji _ Putri Dahlia (Official Lyrics Video) - (320 Kbps).mp3" preload="auto"></audio>
+<audio id="bg-music-2" src="The 1975 - About You (Official) - (320 Kbps).mp3" preload="auto"></audio>
+<audio id="bg-music-3" src="Bruno Mars - Risk It All [The Romantic] - (320 Kbps).mp3" preload="auto"></audio>
+
+<script>
+// ═══════════════════════════════════════════════════
+//  FIND HER — An Emotional Mini Game
+// ═══════════════════════════════════════════════════
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// ── Audio System (Web Audio API for SFX + YouTube for BG music) ──
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+
+function initAudio() {
+  if (!audioCtx) audioCtx = new AudioCtx();
+}
+
+// Reverb convolver for dreamy sound effects
+let reverbNode = null;
+
+function createReverb() {
+  if (!audioCtx || reverbNode) return;
+  const len = audioCtx.sampleRate * 2.5;
+  const impulse = audioCtx.createBuffer(2, len, audioCtx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = impulse.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.8);
+    }
+  }
+  reverbNode = audioCtx.createConvolver();
+  reverbNode.buffer = impulse;
+  reverbNode.connect(audioCtx.destination);
+}
+
+function playNote(freq, duration, type = 'sine', vol = 0.06, delay = 0, useReverb = false) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  const t = audioCtx.currentTime + delay;
+  gain.gain.setValueAtTime(0.001, t);
+  gain.gain.linearRampToValueAtTime(vol, t + Math.min(0.08, duration * 0.15));
+  gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  if (useReverb && reverbNode) {
+    const reverbGain = audioCtx.createGain();
+    reverbGain.gain.value = vol * 0.6;
+    osc.connect(reverbGain);
+    reverbGain.connect(reverbNode);
+  }
+  osc.start(t);
+  osc.stop(t + duration);
+}
+
+function playCollectSound() {
+  playNote(659, 0.15, 'sine', 0.07, 0, true);
+  playNote(784, 0.15, 'sine', 0.07, 0.08, true);
+  playNote(988, 0.2, 'sine', 0.06, 0.15, true);
+}
+
+function playHitSound() {
+  playNote(180, 0.35, 'sawtooth', 0.04);
+  playNote(120, 0.45, 'sawtooth', 0.03, 0.1);
+}
+
+function playJumpSound() {
+  playNote(440, 0.08, 'sine', 0.03);
+  playNote(554, 0.1, 'sine', 0.03, 0.04);
+}
+
+// ── Background Music: Per-level songs ──
+const bgTracks = [
+  document.getElementById('bg-music-0'),  // Level 1: fallingforyou
+  document.getElementById('bg-music-1'),  // Level 2: Old Love
+  document.getElementById('bg-music-2'),  // Level 3: About You
+  document.getElementById('bg-music-3'),  // Level 4: Risk It All
+];
+bgTracks.forEach(t => { t.volume = 0.5; t.loop = true; });
+let currentTrack = null;
+
+function startBgMusic(levelIdx) {
+  const idx = (levelIdx !== undefined) ? levelIdx : currentLevel;
+  const newTrack = bgTracks[Math.min(idx, bgTracks.length - 1)];
+  
+  // If same track already playing, do nothing
+  if (currentTrack === newTrack && !currentTrack.paused) return;
+  
+  // Fade out old track
+  if (currentTrack && currentTrack !== newTrack) {
+    const old = currentTrack;
+    const fadeOut = setInterval(() => {
+      if (old.volume > 0.05) {
+        old.volume = Math.max(0, old.volume - 0.05);
+      } else {
+        old.pause();
+        old.volume = 0.5;
+        old.currentTime = 0;
+        clearInterval(fadeOut);
+      }
+    }, 50);
+  }
+  
+  // Start new track with fade in
+  currentTrack = newTrack;
+  currentTrack.volume = 0;
+  currentTrack.play().catch(() => {});
+  const fadeIn = setInterval(() => {
+    if (currentTrack.volume < 0.45) {
+      currentTrack.volume = Math.min(0.5, currentTrack.volume + 0.05);
+    } else {
+      currentTrack.volume = 0.5;
+      clearInterval(fadeIn);
+    }
+  }, 50);
+}
+
+function stopBgMusic() {
+  if (currentTrack) {
+    const track = currentTrack;
+    const fadeOut = setInterval(() => {
+      if (track.volume > 0.05) {
+        track.volume = Math.max(0, track.volume - 0.03);
+      } else {
+        track.pause();
+        track.volume = 0.5;
+        clearInterval(fadeOut);
+      }
+    }, 50);
+  }
+}
+
+// ── Input ──
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; });
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ── Game State ──
+const GAME_STATE = { TITLE: 0, PLAYING: 1, LEVEL_TRANS: 2, ENDING: 3, FINAL: 4 };
+let state = GAME_STATE.TITLE;
+let currentLevel = 0;
+let camera = { x: 0 };
+let transTimer = 0;
+let endingPhase = 0;
+let endingTimer = 0;
+let finalAlpha = 0;
+let titlePulse = 0;
+let interacted = false;
+
+// ── Emotional Texts ──
+const hitTexts = [
+  "I should've replied sooner…",
+  "You were waiting for me here…",
+  "I thought I had more time…",
+  "Why did I only realize when it was too late?",
+  "You needed me here…",
+  "I took you for granted…",
+  "One more missed moment…",
+  "I was too busy for what mattered most…",
+  "You kept trying… I kept ignoring…",
+  "I'm sorry I wasn't there…",
+];
+
+const collectTexts = [
+  "I remember this…",
+  "We were so happy here…",
+  "This was our moment…",
+  "I should've held on tighter…",
+  "Your smile in this memory…",
+  "I never want to forget…",
+  "This is what I was fighting for…",
+  "How did I let this slip away?",
+];
+
+const levelNames = [
+  "When Everything Was Beautiful",
+  "The First Cracks",
+  "Repeating the Same Mistakes",
+  "Almost There… Please Wait for Me",
+];
+
+// Active floating texts
+let floatingTexts = [];
+let subtitleText = "";
+let subtitleAlpha = 0;
+
+function addFloat(text, x, y, color = '#ffb6c1') {
+  floatingTexts.push({ text, x, y, alpha: 1, life: 180, color });
+}
+
+// ── Player ──
+const player = {
+  x: 60, y: 400, w: 24, h: 32,
+  vx: 0, vy: 0,
+  onGround: false,
+  facing: 1,
+  frame: 0,
+  frameTimer: 0,
+  invincible: 0,
+  memories: 0,
+  totalMemories: 0,
+};
+
+// ── Level Generation ──
+const levelConfigs = [
+  { // Level 1 — Happy
+    length: 3200,
+    bgTop: '#3a1a2e', bgBot: '#1a0a15',
+    groundColor: '#d4728e',
+    platformColor: '#c4608a',
+    accentColor: '#ffb6c1',
+    obstacleChance: 0.015,
+    memoryChance: 0.03,
+    speed: 1,
+    particles: 'hearts',
+  },
+  { // Level 2 — Conflict
+    length: 3800,
+    bgTop: '#2a1525', bgBot: '#120810',
+    groundColor: '#a85070',
+    platformColor: '#9a4565',
+    accentColor: '#e8899e',
+    obstacleChance: 0.025,
+    memoryChance: 0.025,
+    speed: 1.1,
+    particles: 'rain',
+  },
+  { // Level 3 — Mistakes
+    length: 4400,
+    bgTop: '#1e0e1a', bgBot: '#0a0508',
+    groundColor: '#804060',
+    platformColor: '#703555',
+    accentColor: '#cc6688',
+    obstacleChance: 0.04,
+    memoryChance: 0.02,
+    speed: 1.25,
+    particles: 'cracks',
+  },
+  { // Level 4 — Final
+    length: 3000,
+    bgTop: '#150a12', bgBot: '#050205',
+    groundColor: '#603050',
+    platformColor: '#553045',
+    accentColor: '#aa4466',
+    obstacleChance: 0.03,
+    memoryChance: 0.015,
+    speed: 1.0,
+    particles: 'glow',
+  },
+];
+
+let platforms = [];
+let memories = [];
+let obstacles = [];
+let bgParticles = [];
+let girlfriend = null;
+
+const obstacleTypes = [
+  { icon: '📵', label: 'Missed Call' },
+  { icon: '💬', label: 'Unread Message' },
+  { icon: '🎮', label: 'Distraction' },
+  { icon: '📱', label: 'Phone' },
+  { icon: '⏰', label: 'Lost Time' },
+  { icon: '😶', label: 'Silence' },
+];
+
+const memoryTypes = [
+  { icon: '📸', label: 'Photo Together' },
+  { icon: '💌', label: 'Love Letter' },
+  { icon: '🌸', label: 'First Date' },
+  { icon: '💕', label: 'Sweet Moment' },
+  { icon: '🎵', label: 'Our Song' },
+  { icon: '✨', label: 'Precious Memory' },
+];
+
+function generateLevel(lvl) {
+  const cfg = levelConfigs[lvl];
+  platforms = [];
+  memories = [];
+  obstacles = [];
+  bgParticles = [];
+  girlfriend = null;
+  floatingTexts = [];
+  
+  // Ground
+  platforms.push({ x: 0, y: 460, w: cfg.length + 200, h: 80, isGround: true });
+  
+  // Generate platforms — ensure all are reachable
+  // Max jump height ≈ 11²/(2*0.45) ≈ 134px, so max reachable delta from ground ~110px
+  let px = 180;
+  let lastPy = 460; // track last platform y for stepping
+  while (px < cfg.length - 400) {
+    const pw = 90 + Math.random() * 110;
+    // Place platforms at reachable heights (max ~100px above ground)
+    // Also ensure reachable from the previous platform
+    const minY = Math.max(340, lastPy - 90); // can't jump more than ~90px between platforms
+    const maxY = 430;
+    const py = minY + Math.random() * (maxY - minY);
+    platforms.push({ x: px, y: py, w: pw, h: 14, isGround: false });
+    lastPy = py;
+    
+    // Memories on platforms
+    if (Math.random() < cfg.memoryChance * 12) {
+      const mt = memoryTypes[Math.floor(Math.random() * memoryTypes.length)];
+      memories.push({ x: px + pw/2 - 10, y: py - 28, w: 20, h: 20, ...mt, collected: false });
+    }
+    
+    // Tighter spacing so platforms are reachable horizontally
+    px += 120 + Math.random() * 140;
+  }
+  
+  // Ground-level memories
+  for (let mx = 150; mx < cfg.length - 300; mx += 80 + Math.random() * 200) {
+    if (Math.random() < cfg.memoryChance * 8) {
+      const mt = memoryTypes[Math.floor(Math.random() * memoryTypes.length)];
+      memories.push({ x: mx, y: 430, w: 20, h: 20, ...mt, collected: false });
+    }
+  }
+  
+  // Obstacles
+  for (let ox = 300; ox < cfg.length - 300; ox += 60 + Math.random() * 150) {
+    if (Math.random() < cfg.obstacleChance * 10) {
+      const ot = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
+      obstacles.push({ x: ox, y: 430, w: 24, h: 28, ...ot, hit: false, bobOffset: Math.random() * Math.PI * 2 });
+    }
+  }
+  
+  // Background particles
+  for (let i = 0; i < 60; i++) {
+    bgParticles.push({
+      x: Math.random() * cfg.length,
+      y: Math.random() * 460,
+      size: 1 + Math.random() * 3,
+      speed: 0.2 + Math.random() * 0.5,
+      alpha: 0.1 + Math.random() * 0.4,
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
+  
+  // Girlfriend at end of final level
+  if (lvl === 3) {
+    girlfriend = { x: cfg.length - 150, y: 428, w: 24, h: 32 };
+  }
+  
+  // Reset player
+  player.x = 60;
+  player.y = 400;
+  player.vx = 0;
+  player.vy = 0;
+  player.onGround = false;
+  player.invincible = 0;
+  
+  // Subtitle
+  subtitleText = levelNames[lvl];
+  subtitleAlpha = 1;
+}
+
+// ── Physics ──
+const GRAVITY = 0.45;
+const JUMP_FORCE = -11;
+const MOVE_SPEED = 4.2;
+const FRICTION = 0.87;
+
+function updatePlayer() {
+  const cfg = levelConfigs[currentLevel];
+  const spd = MOVE_SPEED * cfg.speed;
+  
+  // Input
+  if (keys['ArrowLeft'] || keys['KeyA']) {
+    player.vx -= spd * 0.3;
+    player.facing = -1;
+  }
+  if (keys['ArrowRight'] || keys['KeyD']) {
+    player.vx += spd * 0.3;
+    player.facing = 1;
+  }
+  if ((keys['ArrowUp'] || keys['KeyW'] || keys['Space']) && player.onGround) {
+    player.vy = JUMP_FORCE;
+    player.onGround = false;
+    playJumpSound();
+  }
+  
+  player.vx *= FRICTION;
+  player.vy += GRAVITY;
+  
+  // Clamp
+  if (Math.abs(player.vx) < 0.1) player.vx = 0;
+  if (player.vy > 12) player.vy = 12;
+  
+  // Move X
+  player.x += player.vx;
+  // Only collide with ground walls (not floating platforms — those are one-way)
+  for (const p of platforms) {
+    if (p.isGround && rectCollide(player, p)) {
+      if (player.vx > 0) player.x = p.x - player.w;
+      else player.x = p.x + p.w;
+      player.vx = 0;
+    }
+  }
+  
+  // Move Y
+  const prevY = player.y;
+  player.y += player.vy;
+  player.onGround = false;
+  for (const p of platforms) {
+    if (rectCollide(player, p)) {
+      if (p.isGround) {
+        // Ground: solid collision from all sides
+        if (player.vy > 0) {
+          player.y = p.y - player.h;
+          player.vy = 0;
+          player.onGround = true;
+        } else {
+          player.y = p.y + p.h;
+          player.vy = 0;
+        }
+      } else {
+        // Floating platforms: one-way (only land on top when falling)
+        const prevBottom = prevY + player.h;
+        if (player.vy > 0 && prevBottom <= p.y + 4) {
+          player.y = p.y - player.h;
+          player.vy = 0;
+          player.onGround = true;
+        }
+      }
+    }
+  }
+  
+  // Boundaries
+  if (player.x < 0) player.x = 0;
+  if (player.y > 520) {
+    // Fell off — respawn on ground near current position
+    player.y = 428;
+    player.vy = 0;
+    player.vx = 0;
+  }
+  
+  // Animation
+  player.frameTimer++;
+  if (Math.abs(player.vx) > 0.5) {
+    if (player.frameTimer % 8 === 0) player.frame = (player.frame + 1) % 4;
+  } else {
+    player.frame = 0;
+  }
+  
+  // Invincibility
+  if (player.invincible > 0) player.invincible--;
+  
+  // Camera
+  const targetCam = player.x - 200;
+  camera.x += (targetCam - camera.x) * 0.08;
+  if (camera.x < 0) camera.x = 0;
+  const maxCam = cfg.length - canvas.width;
+  if (camera.x > maxCam) camera.x = maxCam;
+  
+  // Memory collection
+  for (const m of memories) {
+    if (!m.collected && rectCollide(player, m)) {
+      m.collected = true;
+      player.memories++;
+      player.totalMemories++;
+      playCollectSound();
+      const txt = collectTexts[Math.floor(Math.random() * collectTexts.length)];
+      addFloat(txt, m.x - camera.x, m.y - 20, '#ffddee');
+      addFloat(m.icon + ' ' + m.label, m.x - camera.x, m.y - 40, '#ffb6c1');
+    }
+  }
+  
+  // Obstacle collision
+  if (player.invincible <= 0) {
+    for (const o of obstacles) {
+      if (!o.hit && rectCollide(player, o)) {
+        o.hit = true;
+        player.invincible = 90;
+        playHitSound();
+        const txt = hitTexts[Math.floor(Math.random() * hitTexts.length)];
+        addFloat(txt, player.x - camera.x, player.y - 40, '#ff6688');
+        player.vx = -player.facing * 4;
+        player.vy = -4;
+      }
+    }
+  }
+  
+  // Level completion
+  if (currentLevel < 3 && player.x > cfg.length - 100) {
+    state = GAME_STATE.LEVEL_TRANS;
+    transTimer = 0;
+    // Music keeps playing across levels
+  }
+  
+  // Final level — reach girlfriend
+  if (girlfriend && Math.abs(player.x - girlfriend.x) < 50 && Math.abs(player.y - girlfriend.y) < 50) {
+    state = GAME_STATE.ENDING;
+    endingPhase = 0;
+    endingTimer = 0;
+    stopBgMusic();
+  }
+}
+
+function rectCollide(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ── Drawing ──
+function drawPixelChar(x, y, w, h, facing, frame, isGirl = false) {
+  const sx = x - camera.x;
+  
+  // Body
+  ctx.fillStyle = isGirl ? '#ff8faf' : '#77bbff';
+  const bodyBob = (frame === 1 || frame === 3) ? -1 : 0;
+  ctx.fillRect(sx + 4, y + 8 + bodyBob, w - 8, h - 16);
+  
+  // Head
+  ctx.fillStyle = isGirl ? '#ffd1dc' : '#ffccaa';
+  ctx.fillRect(sx + 4, y + bodyBob, w - 8, 10);
+  
+  // Hair
+  ctx.fillStyle = isGirl ? '#cc5577' : '#5a3a28';
+  ctx.fillRect(sx + 2, y - 2 + bodyBob, w - 4, 5);
+  if (isGirl) {
+    // Longer hair
+    ctx.fillRect(sx + 2, y + 3 + bodyBob, 4, 12);
+    ctx.fillRect(sx + w - 6, y + 3 + bodyBob, 4, 12);
+  }
+  
+  // Eyes
+  ctx.fillStyle = '#333';
+  if (isGirl) {
+    ctx.fillRect(sx + 7, y + 4 + bodyBob, 3, 3);
+    ctx.fillRect(sx + 14, y + 4 + bodyBob, 3, 3);
+    // Blush
+    ctx.fillStyle = '#ff9fbb88';
+    ctx.fillRect(sx + 5, y + 6 + bodyBob, 4, 2);
+    ctx.fillRect(sx + 15, y + 6 + bodyBob, 4, 2);
+  } else {
+    const ex = facing > 0 ? 2 : 0;
+    ctx.fillRect(sx + 8 + ex, y + 4 + bodyBob, 2, 2);
+    ctx.fillRect(sx + 14 + ex, y + 4 + bodyBob, 2, 2);
+  }
+  
+  // Legs
+  ctx.fillStyle = isGirl ? '#cc5577' : '#445588';
+  if (frame === 1) {
+    ctx.fillRect(sx + 5, y + h - 8, 5, 8);
+    ctx.fillRect(sx + 14, y + h - 6, 5, 6);
+  } else if (frame === 3) {
+    ctx.fillRect(sx + 5, y + h - 6, 5, 6);
+    ctx.fillRect(sx + 14, y + h - 8, 5, 8);
+  } else {
+    ctx.fillRect(sx + 6, y + h - 8, 5, 8);
+    ctx.fillRect(sx + 13, y + h - 8, 5, 8);
+  }
+  
+  // Girl skirt/dress detail
+  if (isGirl) {
+    ctx.fillStyle = '#ff6f8f';
+    ctx.fillRect(sx + 2, y + 16 + bodyBob, w - 4, 6);
+  }
+  
+  // Subtle glow for girlfriend
+  if (isGirl) {
+    ctx.save();
+    ctx.globalAlpha = 0.15 + Math.sin(Date.now() * 0.003) * 0.1;
+    ctx.shadowColor = '#ff69b4';
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = '#ff69b4';
+    ctx.beginPath();
+    ctx.arc(sx + w/2, y + h/2, 25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawBackground(lvl) {
+  const cfg = levelConfigs[lvl];
+  
+  // Gradient sky
+  const grad = ctx.createLinearGradient(0, 0, 0, 460);
+  grad.addColorStop(0, cfg.bgTop);
+  grad.addColorStop(1, cfg.bgBot);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  // Stars / particles
+  const time = Date.now() * 0.001;
+  for (const p of bgParticles) {
+    const px = ((p.x - camera.x * 0.3) % canvas.width + canvas.width) % canvas.width;
+    const py = p.y + Math.sin(time + p.phase) * 10;
+    ctx.globalAlpha = p.alpha * (0.5 + Math.sin(time * 2 + p.phase) * 0.5);
+    
+    if (cfg.particles === 'hearts' && p.size > 2) {
+      ctx.fillStyle = '#ff69b4';
+      ctx.font = `${8 + p.size * 2}px serif`;
+      ctx.fillText('♥', px, py);
+    } else if (cfg.particles === 'rain') {
+      ctx.fillStyle = '#8888cc';
+      ctx.fillRect(px, py, 1, 4 + p.size * 2);
+    } else if (cfg.particles === 'cracks') {
+      ctx.fillStyle = '#664444';
+      ctx.fillRect(px, py, p.size, p.size);
+    } else if (cfg.particles === 'glow') {
+      ctx.fillStyle = '#ff69b4';
+      ctx.beginPath();
+      ctx.arc(px, py, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = cfg.accentColor;
+      ctx.fillRect(px, py, p.size, p.size);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawPlatforms(lvl) {
+  const cfg = levelConfigs[lvl];
+  
+  for (const p of platforms) {
+    const sx = p.x - camera.x;
+    if (sx + p.w < -50 || sx > canvas.width + 50) continue;
+    
+    if (p.isGround) {
+      // Ground with gradient
+      const gGrad = ctx.createLinearGradient(0, p.y, 0, p.y + p.h);
+      gGrad.addColorStop(0, cfg.groundColor);
+      gGrad.addColorStop(1, cfg.bgBot);
+      ctx.fillStyle = gGrad;
+      ctx.fillRect(sx, p.y, p.w, p.h);
+      
+      // Grass/top line
+      ctx.fillStyle = cfg.accentColor;
+      ctx.fillRect(sx, p.y, p.w, 3);
+    } else {
+      ctx.fillStyle = cfg.platformColor;
+      ctx.fillRect(sx, p.y, p.w, p.h);
+      ctx.fillStyle = cfg.accentColor + '44';
+      ctx.fillRect(sx, p.y, p.w, 3);
+    }
+  }
+}
+
+function drawMemories() {
+  const time = Date.now() * 0.003;
+  for (const m of memories) {
+    if (m.collected) continue;
+    const sx = m.x - camera.x;
+    if (sx < -30 || sx > canvas.width + 30) continue;
+    
+    const bob = Math.sin(time + m.x * 0.01) * 4;
+    
+    // Glow
+    ctx.save();
+    ctx.globalAlpha = 0.3 + Math.sin(time * 2) * 0.15;
+    ctx.shadowColor = '#ffb6c1';
+    ctx.shadowBlur = 15;
+    ctx.fillStyle = '#ffb6c1';
+    ctx.beginPath();
+    ctx.arc(sx + m.w/2, m.y + bob + m.h/2, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    
+    // Icon
+    ctx.font = '16px serif';
+    ctx.fillText(m.icon, sx, m.y + bob + 16);
+  }
+}
+
+function drawObstacles() {
+  const time = Date.now() * 0.003;
+  for (const o of obstacles) {
+    if (o.hit) continue;
+    const sx = o.x - camera.x;
+    if (sx < -30 || sx > canvas.width + 30) continue;
+    
+    const bob = Math.sin(time + o.bobOffset) * 3;
+    
+    // Warning glow
+    ctx.save();
+    ctx.globalAlpha = 0.2;
+    ctx.fillStyle = '#ff4466';
+    ctx.shadowColor = '#ff4466';
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(sx + o.w/2, o.y + bob + o.h/2, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    
+    // Icon
+    ctx.font = '18px serif';
+    ctx.fillText(o.icon, sx, o.y + bob + 18);
+  }
+}
+
+function drawFloatingTexts() {
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const ft = floatingTexts[i];
+    ft.y -= 0.5;
+    ft.life--;
+    ft.alpha = Math.min(1, ft.life / 60);
+    
+    if (ft.life <= 0) {
+      floatingTexts.splice(i, 1);
+      continue;
+    }
+    
+    ctx.save();
+    ctx.globalAlpha = ft.alpha;
+    ctx.fillStyle = ft.color;
+    ctx.font = 'italic 14px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#000';
+    ctx.shadowBlur = 4;
+    ctx.fillText(ft.text, ft.x, ft.y);
+    ctx.restore();
+  }
+}
+
+function drawHUD() {
+  // Memories counter
+  ctx.save();
+  ctx.fillStyle = '#ffb6c1';
+  ctx.font = '16px Georgia, serif';
+  ctx.textAlign = 'left';
+  ctx.shadowColor = '#000';
+  ctx.shadowBlur = 4;
+  ctx.fillText(`💕 Memories: ${player.memories}`, 20, 30);
+  
+  // Level indicator
+  ctx.fillStyle = '#ffddee88';
+  ctx.font = '12px Georgia, serif';
+  ctx.fillText(`Level ${currentLevel + 1} / 4`, 20, 50);
+  
+  // Subtitle fade
+  if (subtitleAlpha > 0) {
+    subtitleAlpha -= 0.003;
+    ctx.globalAlpha = Math.max(0, subtitleAlpha);
+    ctx.fillStyle = '#ffddee';
+    ctx.font = 'italic 22px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(subtitleText, canvas.width / 2, 80);
+  }
+  ctx.restore();
+}
+
+// ── Title Screen ──
+function drawTitle() {
+  titlePulse += 0.02;
+  
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#2a0a1a');
+  grad.addColorStop(1, '#0a0208');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  // Floating hearts
+  const time = Date.now() * 0.001;
+  for (let i = 0; i < 20; i++) {
+    const hx = (Math.sin(time * 0.3 + i * 1.5) * 0.5 + 0.5) * canvas.width;
+    const hy = ((time * 0.05 + i * 0.15) % 1) * canvas.height;
+    ctx.globalAlpha = 0.1 + Math.sin(time + i) * 0.08;
+    ctx.fillStyle = '#ff69b4';
+    ctx.font = `${12 + Math.sin(i) * 6}px serif`;
+    ctx.fillText('♥', hx, hy);
+  }
+  ctx.globalAlpha = 1;
+  
+  // Title
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ff69b4';
+  ctx.shadowColor = '#ff69b4';
+  ctx.shadowBlur = 20 + Math.sin(titlePulse) * 10;
+  ctx.font = 'bold 52px Georgia, serif';
+  ctx.fillText('Find Her', canvas.width/2, 200);
+  ctx.restore();
+  
+  // Subtitle
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffb6c1aa';
+  ctx.font = 'italic 18px Georgia, serif';
+  ctx.fillText('"A journey through the memories I almost forgot…"', canvas.width/2, 250);
+  ctx.restore();
+  
+  // Instructions
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.globalAlpha = 0.5 + Math.sin(titlePulse * 2) * 0.3;
+  ctx.fillStyle = '#ffddee';
+  ctx.font = '16px Georgia, serif';
+  ctx.fillText('Press ENTER or SPACE to begin', canvas.width/2, 380);
+  ctx.restore();
+  
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffb6c166';
+  ctx.font = '13px Georgia, serif';
+  ctx.fillText('Arrow Keys / WASD to move  •  Space / Up to jump', canvas.width/2, 420);
+  ctx.restore();
+}
+
+// ── Level Transition ──
+function drawLevelTransition() {
+  transTimer++;
+  
+  const alpha = transTimer < 60 ? transTimer / 60 : transTimer < 180 ? 1 : Math.max(0, 1 - (transTimer - 180) / 60);
+  
+  ctx.fillStyle = `rgba(10, 2, 8, ${alpha})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  if (transTimer > 40 && transTimer < 200) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = Math.min(1, (transTimer - 40) / 30) * Math.min(1, (200 - transTimer) / 30);
+    ctx.fillStyle = '#ffb6c1';
+    ctx.font = 'italic 24px Georgia, serif';
+    ctx.fillText(levelNames[currentLevel + 1] || '', canvas.width/2, canvas.height/2 - 10);
+    
+    ctx.fillStyle = '#ffddee88';
+    ctx.font = '14px Georgia, serif';
+    ctx.fillText(`Level ${currentLevel + 2}`, canvas.width/2, canvas.height/2 + 25);
+    ctx.restore();
+  }
+  
+  if (transTimer > 240) {
+    currentLevel++;
+    generateLevel(currentLevel);
+    state = GAME_STATE.PLAYING;
+    startBgMusic(currentLevel);
+  }
+}
+
+// ── Ending Sequence ──
+const endingMessages = [
+  { text: "I was always here… you just didn't see me when it mattered.", duration: 300 },
+  { text: "You found me… but will you be here on time next time?", duration: 300 },
+  { text: "", duration: 60 },
+];
+
+const finalMessage = "Some things can still be fixed… but only through actions.";
+
+function drawEnding() {
+  endingTimer++;
+  const cfg = levelConfigs[3];
+  
+  // Draw the scene darkening
+  drawBackground(3);
+  drawPlatforms(3);
+  
+  // Draw both characters facing each other
+  const cx = canvas.width / 2;
+  
+  // Draw player and girlfriend close
+  drawPixelChar(camera.x + cx - 60, 428, 24, 32, 1, 0, false);
+  drawPixelChar(camera.x + cx + 36, 428, 24, 32, -1, 0, true);
+  
+  // Emotional text sequence
+  let fadeOverlay = 0;
+  
+  if (endingPhase < endingMessages.length) {
+    const msg = endingMessages[endingPhase];
+    const phaseTime = endingTimer;
+    
+    if (phaseTime > msg.duration) {
+      endingTimer = 0;
+      endingPhase++;
+    } else if (msg.text) {
+      const msgAlpha = Math.min(1, phaseTime / 60) * Math.min(1, (msg.duration - phaseTime) / 60);
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.globalAlpha = msgAlpha;
+      ctx.fillStyle = '#ffddee';
+      ctx.font = 'italic 20px Georgia, serif';
+      ctx.shadowColor = '#000';
+      ctx.shadowBlur = 8;
+      
+      // Word wrap
+      const words = msg.text.split(' ');
+      let lines = [''];
+      for (const word of words) {
+        const test = lines[lines.length-1] + (lines[lines.length-1] ? ' ' : '') + word;
+        if (ctx.measureText(test).width > 700) lines.push(word);
+        else lines[lines.length-1] = test;
+      }
+      lines.forEach((line, i) => {
+        ctx.fillText(line, cx, 180 + i * 30);
+      });
+      ctx.restore();
+    }
+  } else {
+    // Fade to black → final message
+    state = GAME_STATE.FINAL;
+    endingTimer = 0;
+  }
+}
+
+function drawFinal() {
+  endingTimer++;
+  
+  // Fade to black
+  const blackAlpha = Math.min(1, endingTimer / 120);
+  ctx.fillStyle = `rgba(5, 2, 5, ${blackAlpha})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  if (endingTimer > 150) {
+    const textAlpha = Math.min(1, (endingTimer - 150) / 90);
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = textAlpha;
+    
+    ctx.fillStyle = '#ff69b4';
+    ctx.font = 'italic 22px Georgia, serif';
+    ctx.shadowColor = '#ff69b4';
+    ctx.shadowBlur = 15;
+    ctx.fillText(finalMessage, canvas.width/2, canvas.height/2 - 20);
+    
+    // Memories collected
+    if (endingTimer > 250) {
+      const memAlpha = Math.min(1, (endingTimer - 250) / 60);
+      ctx.globalAlpha = memAlpha * 0.7;
+      ctx.fillStyle = '#ffb6c1';
+      ctx.font = '15px Georgia, serif';
+      ctx.shadowBlur = 0;
+      ctx.fillText(`💕 ${player.totalMemories} memories collected along the way`, canvas.width/2, canvas.height/2 + 30);
+    }
+    
+    // Play again prompt
+    if (endingTimer > 400) {
+      ctx.globalAlpha = 0.4 + Math.sin(endingTimer * 0.03) * 0.2;
+      ctx.fillStyle = '#ffddee';
+      ctx.font = '14px Georgia, serif';
+      ctx.fillText('Press ENTER to start again', canvas.width/2, canvas.height/2 + 80);
+    }
+    
+    ctx.restore();
+  }
+  
+  // Restart
+  if (endingTimer > 400 && (keys['Enter'] || keys['Space'])) {
+    currentLevel = 0;
+    player.memories = 0;
+    player.totalMemories = 0;
+    generateLevel(0);
+    state = GAME_STATE.PLAYING;
+    startBgMusic();
+  }
+}
+
+// ── Main Loop ──
+function update() {
+  if (state === GAME_STATE.PLAYING) {
+    updatePlayer();
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  switch (state) {
+    case GAME_STATE.TITLE:
+      drawTitle();
+      if ((keys['Enter'] || keys['Space']) && !interacted) {
+        interacted = true;
+      }
+      if (interacted && !keys['Enter'] && !keys['Space']) {
+        // Wait for key release after first press
+        initAudio();
+        currentLevel = 0;
+        player.memories = 0;
+        player.totalMemories = 0;
+        generateLevel(0);
+        state = GAME_STATE.PLAYING;
+        startBgMusic();
+      }
+      break;
+      
+    case GAME_STATE.PLAYING:
+      drawBackground(currentLevel);
+      drawPlatforms(currentLevel);
+      drawMemories();
+      drawObstacles();
+      
+      // Draw player
+      if (player.invincible <= 0 || Math.floor(player.invincible / 4) % 2 === 0) {
+        drawPixelChar(player.x, player.y, player.w, player.h, player.facing, player.frame, false);
+      }
+      
+      // Draw girlfriend in final level
+      if (girlfriend) {
+        drawPixelChar(girlfriend.x, girlfriend.y, girlfriend.w, girlfriend.h, -1, 0, true);
+      }
+      
+      drawFloatingTexts();
+      drawHUD();
+      break;
+      
+    case GAME_STATE.LEVEL_TRANS:
+      drawBackground(currentLevel);
+      drawPlatforms(currentLevel);
+      drawLevelTransition();
+      break;
+      
+    case GAME_STATE.ENDING:
+      drawEnding();
+      break;
+      
+    case GAME_STATE.FINAL:
+      drawFinal();
+      break;
+  }
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
