@@ -20,11 +20,58 @@ canvas {
   border-radius: 8px;
   box-shadow: 0 0 40px #ff69b433;
   image-rendering: pixelated;
+  max-width: 100vw;
+  max-height: 60vh;
+  width: 100%;
+  height: auto;
+}
+#mobile-controls {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 35vh;
+  z-index: 10;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#mobile-controls .btn {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255,105,180,0.15);
+  border: 2px solid rgba(255,182,193,0.3);
+  color: #ffb6c1;
+  font-size: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+#mobile-controls .btn:active, #mobile-controls .btn.pressed {
+  background: rgba(255,105,180,0.35);
+  border-color: rgba(255,182,193,0.6);
+}
+#btn-left { width: 64px; height: 64px; left: 20px; bottom: 20px; }
+#btn-right { width: 64px; height: 64px; left: 100px; bottom: 20px; }
+#btn-jump { width: 80px; height: 80px; right: 20px; bottom: 15px; }
+#btn-action { width: 60px; height: 60px; right: 30px; bottom: 110px; font-size: 14px; }
+@media (pointer: coarse), (max-width: 768px) {
+  #mobile-controls { display: block; }
+  canvas { max-height: 55vh; }
+  body { flex-direction: column; }
 }
 </style>
 </head>
 <body>
 <canvas id="game" width="960" height="540"></canvas>
+<div id="mobile-controls">
+  <div class="btn" id="btn-left">◀</div>
+  <div class="btn" id="btn-right">▶</div>
+  <div class="btn" id="btn-jump">▲</div>
+  <div class="btn" id="btn-action">OK</div>
+</div>
 
 <!-- Background Music: One song per level -->
 <audio id="bg-music-0" src="The 1975 - fallingforyou.mp3" preload="auto"></audio>
@@ -162,6 +209,33 @@ function stopBgMusic() {
 const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ── Mobile Touch Controls ──
+function setupMobileBtn(id, keyCode) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  const press = (e) => { e.preventDefault(); keys[keyCode] = true; btn.classList.add('pressed'); };
+  const release = (e) => { e.preventDefault(); keys[keyCode] = false; btn.classList.remove('pressed'); };
+  btn.addEventListener('touchstart', press, { passive: false });
+  btn.addEventListener('touchend', release, { passive: false });
+  btn.addEventListener('touchcancel', release, { passive: false });
+}
+setupMobileBtn('btn-left', 'ArrowLeft');
+setupMobileBtn('btn-right', 'ArrowRight');
+setupMobileBtn('btn-jump', 'Space');
+setupMobileBtn('btn-action', 'Enter');
+
+// Prevent zoom/scroll on mobile
+document.addEventListener('touchmove', e => { if (e.target.closest('#mobile-controls, canvas')) e.preventDefault(); }, { passive: false });
+
+// Tap canvas to start (for title screen)
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (state === GS.TITLE || state === GS.FINAL) {
+    keys['Enter'] = true;
+    setTimeout(() => { keys['Enter'] = false; }, 100);
+  }
+}, { passive: false });
 
 // ── Game State ──
 const GS = { TITLE: 0, PLAYING: 1, TRANS: 2, ENDING: 3, FINAL: 4 };
@@ -1007,9 +1081,10 @@ function drawTitle() {
   ctx.globalAlpha = 0.5 + Math.sin(titlePulse * 2) * 0.3;
   ctx.fillStyle = '#ffddee'; ctx.font = '16px Georgia, serif';
   ctx.fillText('Press ENTER or SPACE to begin', canvas.width / 2, 370);
+  ctx.fillText('(Tap screen on mobile)', canvas.width / 2, 395);
   ctx.restore();
   ctx.save(); ctx.textAlign = 'center'; ctx.fillStyle = '#ffb6c166'; ctx.font = '13px Georgia, serif';
-  ctx.fillText('Arrow Keys / WASD to move  •  Space / Up to jump', canvas.width / 2, 410);
+  ctx.fillText('Arrow Keys / WASD to move  •  Space / Up to jump', canvas.width / 2, 420);
   ctx.restore();
 }
 
